@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Решатель задач</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--text:#1f1e1b;--muted:#6b6a64;--accent:#3b5bdb;--accent-t:#fff;--border:#dcdad2;--ok:#e9f5ec;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#17171a;--card:#212125;--text:#ececea;--muted:#9a9990;--accent:#7c93f5;--accent-t:#10101a;--border:#35353b;--ok:#1d2a22}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5}
+main{max-width:720px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.6rem;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 16px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tab{flex:1;padding:10px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:10px;font-size:1rem;cursor:pointer}
+.tab[aria-pressed="true"],.sty[aria-pressed="true"]{background:var(--accent);color:var(--accent-t);border-color:var(--accent)}
+textarea,input[type=password]{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text);font:inherit}
+textarea{min-height:120px;resize:vertical}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+.go{padding:10px 20px;border:0;border-radius:10px;background:var(--accent);color:var(--accent-t);font-size:1rem;cursor:pointer}
+.go:disabled{opacity:.5}
+.ex,.sty{padding:6px 12px;border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:999px;cursor:pointer;font-size:.88rem}
+.sty{color:var(--text)}
+.card{margin-top:18px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:12px}
+.card h2{font-size:1rem;margin:0 0 8px;color:var(--muted);font-weight:600}
+.out{white-space:pre-wrap;word-wrap:break-word}
+.local{background:var(--ok)}
+.err{color:#c0392b}
+details{margin-bottom:16px;color:var(--muted)}
+summary{cursor:pointer}
+</style>
+</head>
+<body>
+<main>
+<h1>Решатель задач</h1>
+<p class="sub">Уравнения, текстовые задачи и физика — с решением по шагам.</p>
+
+<details id="keybox">
+<summary>Ключ Claude API (нужен для пошаговых решений)</summary>
+<p>Ключ хранится только в вашем браузере и отправляется только на api.anthropic.com. Получить его: console.anthropic.com. Не вводите ключ на чужих компьютерах.</p>
+<div class="row"><input type="password" id="key" placeholder="sk-ant-..." autocomplete="off" style="flex:1;min-width:200px"><button class="ex" id="savekey">Сохранить</button><button class="ex" id="delkey">Удалить</button></div>
+</details>
+
+<div class="tabs">
+<button class="tab" id="t-eq" aria-pressed="true">Уравнение</button>
+<button class="tab" id="t-word" aria-pressed="false">Текстовая задача</button>
+<button class="tab" id="t-phys" aria-pressed="false">Физика</button>
+</div>
+
+<textarea id="input"></textarea>
+<div class="row" id="examples"></div>
+<div class="row" id="styles"><span class="sub" style="margin:0">Ответ:</span></div>
+<div class="row"><button class="go" id="go">Решить</button><span id="status" class="sub" style="margin:0"></span></div>
+
+<div id="local" class="card local" hidden><h2>Быстрая проверка (числовые корни)</h2><div class="out" id="local-out"></div></div>
+<div id="result" class="card" hidden><h2>Решение</h2><div class="out" id="result-out"></div></div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.4.2/math.min.js"></script>
+<script>
+(function(){
+var MODEL='claude-sonnet-5-5';
+var mode='eq',style='detail';
+var $=function(id){return document.getElementById(id)};
+var EX={
+eq:['x^2 - 5x + 6 = 0','2(x+3) = 3x - 1','sin(x) = 0.5','x^3 - 2x = 5'],
+word:['Поезд проехал 240 км за 3 часа. С какой скоростью он шёл?','Из двух городов навстречу выехали два автомобиля со скоростями 60 и 80 км/ч. Расстояние 420 км. Через сколько часов они встретятся?','Цена выросла на 20%, потом снизилась на 20%. Как изменилась цена?'],
+phys:['Тело брошено вертикально вверх со скоростью 20 м/с. На какую высоту оно поднимется?','Автомобиль массой 1200 кг разгоняется с места до 25 м/с за 10 с. Найдите равнодействующую силу.','Сколько тепла нужно, чтобы нагреть 2 кг воды от 20 °C до 100 °C?','Сопротивления 6 Ом и 3 Ом соединены параллельно и подключены к 12 В. Найдите общий ток.']};
+var PH={eq:'Например: 2x^2 - 5x + 2 = 0',word:'Вставьте условие задачи',phys:'Вставьте условие задачи по физике'};
+var STY={short:'Только ответ',brief:'Кратко',detail:'Подробно',simple:'Объясни просто'};
+var SYSTEM={
+eq:'Ты — преподаватель математики. Реши уравнение (или систему). Отвечай по-русски, по шагам, кратко и ясно. Не используй Markdown и LaTeX: формулы пиши обычным текстом (x^2, sqrt(), дроби через /). В конце — строка «Ответ: ...». Если решений нет или запись некорректна, объясни.',
+word:'Ты — преподаватель математики. Реши текстовую задачу. Отвечай по-русски. Структура: 1) Дано и что найти; 2) Обозначения и уравнение; 3) Решение по шагам; 4) Проверка; 5) строка «Ответ: ...» с единицами. Не используй Markdown и LaTeX. Если данных не хватает, скажи, каких.',
+phys:'Ты — преподаватель физики. Реши задачу. Отвечай по-русски. Структура: 1) Дано (с переводом в СИ); 2) Какие законы и формулы применяем и почему; 3) Вывод формулы в общем виде; 4) Подстановка и вычисление; 5) Проверка размерности и правдоподобия; 6) строка «Ответ: ...» с единицами. Если g не задано, g = 9,8 м/с². Не используй Markdown и LaTeX. Если данных не хватает, скажи, каких.'};
+var STYLE={
+short:'Стиль ответа (приоритетнее структуры выше): выдай ТОЛЬКО итоговый ответ одной строкой «Ответ: ...» с единицами, без решения.',
+brief:'Стиль ответа (приоритетнее структуры выше): очень кратко, не более 3–4 строк: ключевая формула или идея, вычисление и «Ответ: ...».',
+detail:'Стиль ответа: подробное решение по шагам с проверкой, как описано выше.',
+simple:'Стиль ответа (приоритетнее структуры выше): объясни как новичку, простыми словами; поясняй, зачем нужен каждый шаг и откуда каждая формула; можно привести простую аналогию. В конце «Ответ: ...».'};
+
+function store(op,v){try{return op==='get'?localStorage.getItem('ak'):op==='set'?localStorage.setItem('ak',v):localStorage.removeItem('ak')}catch(e){return null}}
+if(store('get'))$('key').placeholder='Ключ сохранён';
+$('savekey').onclick=function(){var v=$('key').value.trim();if(v){store('set',v);$('key').value='';$('key').placeholder='Ключ сохранён'}};
+$('delkey').onclick=function(){store('del');$('key').value='';$('key').placeholder='sk-ant-...'};
+
+function setMode(m){
+  mode=m;
+  ['eq','word','phys'].forEach(function(k){$('t-'+k).setAttribute('aria-pressed',k===m)});
+  $('input').placeholder=PH[m];
+  var box=$('examples');box.textContent='';
+  EX[m].forEach(function(t){var b=document.createElement('button');b.className='ex';b.textContent=t.length>34?t.slice(0,32)+'…':t;b.onclick=function(){$('input').value=t};box.appendChild(b)});
+  $('local').hidden=true;$('result').hidden=true;
+}
+['eq','word','phys'].forEach(function(k){$('t-'+k).onclick=function(){setMode(k)}});
+Object.keys(STY).forEach(function(k){var b=document.createElement('button');b.className='sty';b.textContent=STY[k];b.setAttribute('aria-pressed',k===style);b.onclick=function(){style=k;Array.prototype.forEach.call($('styles').querySelectorAll('.sty'),function(x){x.setAttribute('aria-pressed',x===b)})};$('styles').appendChild(b)});
+setMode('eq');
+
+function localSolve(src){
+  try{
+    var s=src.replace(/,/g,'.').replace(/×/g,'*').replace(/−/g,'-').replace(/÷/g,'/');
+    var parts=s.split('=');if(parts.length!==2)return null;
+    var vars=(s.match(/[a-zA-Z_]\w*/g)||[]).filter(function(v){return !(v in math)});
+    var uniq=Array.from(new Set(vars));if(uniq.length!==1)return null;
+    var v=uniq[0],f=math.compile('('+parts[0]+')-('+parts[1]+')');
+    var g=function(x){var sc={};sc[v]=x;var r=f.evaluate(sc);return typeof r==='number'?r:NaN};
+    var roots=[],a=-1000,n=40000,h=2000/n,px=a,py=g(a);
+    for(var i=1;i<=n;i++){
+      var x=a+i*h,y=g(x);
+      if(isFinite(py)&&isFinite(y)){
+        if(y===0)roots.push(x);
+        else if(py*y<0){var lo=px,hi=x;for(var k=0;k<80;k++){var m=(lo+hi)/2;if(g(lo)*g(m)<=0)hi=m;else lo=m}
+          var r=(lo+hi)/2;if(Math.abs(g(r))<1e-6*(1+Math.abs(r)))roots.push(r)}
+      }
+      px=x;py=y;
+    }
+    var out=[];roots.forEach(function(r){r=Math.round(r*1e8)/1e8;if(!out.some(function(o){return Math.abs(o-r)<1e-6}))out.push(r)});
+    return {v:v,roots:out};
+  }catch(e){return null}
+}
+
+$('go').onclick=async function(){
+  var q=$('input').value.trim();if(!q)return;
+  var out=$('result-out');out.className='out';
+  $('local').hidden=true;$('result').hidden=false;out.textContent='Решаю…';
+  $('go').disabled=true;
+  if(mode==='eq'){
+    var L=localSolve(q);
+    if(L){$('local').hidden=false;$('local-out').textContent=L.roots.length?(L.v+' ≈ '+L.roots.join(';  ')+'  (поиск на отрезке [−1000; 1000])'):'Вещественных корней на отрезке [−1000; 1000] не найдено.'}
+  }
+  var key=store('get');
+  if(!key){
+    out.textContent='Для пошагового решения введите ключ Claude API (раздел вверху страницы).'+(mode==='eq'?' Числовой результат уже показан выше.':'');
+    $('go').disabled=false;return;
+  }
+  try{
+    var r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
+      headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:MODEL,max_tokens:2000,messages:[{role:'user',content:SYSTEM[mode]+'\n\n'+STYLE[style]+'\n\nЗадание:\n'+q}]})});
+    var d=await r.json();
+    if(!r.ok)throw new Error((d&&d.error&&d.error.message)||('Ошибка '+r.status));
+    out.textContent=d.content.map(function(c){return c.type==='text'?c.text:''}).join('');
+  }catch(e){out.className='out err';out.textContent='Не удалось получить решение: '+e.message}
+  finally{$('go').disabled=false}
+};
+})();
+</script>
+</body>
+</html>
